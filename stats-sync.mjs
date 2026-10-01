@@ -23,6 +23,11 @@ export function history(rows,start,end){
  const result=[];for(let date=start;date<=end;date=addDays(date,1))result.push({date,views:counts.get(date)||0});
  return result;
 }
+export function subscriberHistory(rows,start,end){
+ const counts=new Map(rows.map(r=>[r[0],r[2]]));
+ const result=[];for(let date=start;date<=end;date=addDays(date,1))result.push({date,gained:counts.get(date)||0});
+ return result;
+}
 const numeric=v=>/^\d+$/.test(String(v))&&Number.isSafeInteger(Number(v))?Number(v):null;
 const sum=(rows,field)=>rows.every(c=>Number.isSafeInteger(c[field]))?rows.reduce((n,c)=>n+c[field],0):null;
 export function normalize(publicCache,analyticsCache,now=new Date()){
@@ -31,7 +36,9 @@ export function normalize(publicCache,analyticsCache,now=new Date()){
  const normalized=channels.map(c=>{
   const pub=publicCache[c.key]||{},a=analyticsCache[c.key],dailyViews=a&&analyticsThrough&&a.dailyViews[0].date<=addDays(analyticsThrough,-59)?a.dailyViews.filter(d=>d.date>=addDays(analyticsThrough,-59)&&d.date<=analyticsThrough):[];
   const ready=dailyViews.length===60,views30d=ready?dailyViews.slice(-30).reduce((n,d)=>n+d.views,0):null,previousViews30d=ready?dailyViews.slice(0,30).reduce((n,d)=>n+d.views,0):null;
-  return {key:c.key,name:c.name,order:c.order,channelId:pub.channelId||null,thumbnail:pub.thumbnail||null,subscribers:pub.subscribers??null,totalViews:pub.totalViews??null,publicUpdatedAt:pub.updatedAt||null,analyticsUpdatedAt:a?.updatedAt||null,analyticsStatus:ready?'connected':'connection-required',analyticsThrough:ready?analyticsThrough:null,views30d,previousViews30d,changePercent:ready?percent(views30d,previousViews30d):null,dailyViews};
+  const gains=ready&&a?.dailySubscribers?.filter(d=>d.date>=addDays(analyticsThrough,-59)&&d.date<=analyticsThrough),subsReady=gains?.length===60;
+  const subscribersGained30d=subsReady?gains.slice(-30).reduce((n,d)=>n+d.gained,0):null,previousSubscribersGained30d=subsReady?gains.slice(0,30).reduce((n,d)=>n+d.gained,0):null;
+  return {key:c.key,name:c.name,order:c.order,channelId:pub.channelId||null,thumbnail:pub.thumbnail||null,subscribers:pub.subscribers??null,totalViews:pub.totalViews??null,publicUpdatedAt:pub.updatedAt||null,analyticsUpdatedAt:a?.updatedAt||null,analyticsStatus:ready?'connected':'connection-required',analyticsThrough:ready?analyticsThrough:null,views30d,previousViews30d,changePercent:ready?percent(views30d,previousViews30d):null,subscribersGained30d,previousSubscribersGained30d,subscriberChangePercent:subsReady?percent(subscribersGained30d,previousSubscribersGained30d):null,dailyViews};
  });
  const views30d=sum(normalized,'views30d'),previousViews30d=sum(normalized,'previousViews30d');
  const publicTimes=normalized.map(c=>c.publicUpdatedAt).filter(Boolean).sort();
@@ -58,15 +65,15 @@ export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=n
  for(const c of channels){
   const refresh=env[c.credentialRef+'_REFRESH_TOKEN'],cached=analyticsCache[c.key];
   if(!refresh||!env.GOOGLE_OAUTH_CLIENT_ID||!env.GOOGLE_OAUTH_CLIENT_SECRET||!publicCache[c.key]?.channelId)continue;
-  if(cached&&now-new Date(cached.updatedAt)<6*3600000)continue;
+  if(cached?.dailySubscribers?.length===90&&now-new Date(cached.updatedAt)<6*3600000)continue;
   try{
    const token=await json(await fetcher('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:env.GOOGLE_OAUTH_CLIENT_ID,client_secret:env.GOOGLE_OAUTH_CLIENT_SECRET,refresh_token:refresh,grant_type:'refresh_token'}),signal:AbortSignal.timeout(20000)}));
    const end=lastCompleteDay(now),start=addDays(end,-100);
-   const report=await json(await fetcher('https://youtubeanalytics.googleapis.com/v2/reports?'+new URLSearchParams({ids:'channel=='+publicCache[c.key].channelId,startDate:start,endDate:end,metrics:'views',dimensions:'day',sort:'day',maxResults:'200'}),{headers:{Authorization:`Bearer ${token.access_token}`},signal:AbortSignal.timeout(30000)}));
+   const report=await json(await fetcher('https://youtubeanalytics.googleapis.com/v2/reports?'+new URLSearchParams({ids:'channel=='+publicCache[c.key].channelId,startDate:start,endDate:end,metrics:'views,subscribersGained',dimensions:'day',sort:'day',maxResults:'200'}),{headers:{Authorization:`Bearer ${token.access_token}`},signal:AbortSignal.timeout(30000)}));
    const rows=report.rows||[];if(!rows.length)throw new Error('Analytics pending');
-   if(rows.some(r=>!/^\d{4}-\d{2}-\d{2}$/.test(r[0])||!Number.isSafeInteger(r[1])||r[1]<0||r[0]<start||r[0]>end))throw new Error('Invalid daily report');
+   if(rows.some(r=>!/^\d{4}-\d{2}-\d{2}$/.test(r[0])||!Number.isSafeInteger(r[1])||r[1]<0||!Number.isSafeInteger(r[2])||r[2]<0||r[0]<start||r[0]>end))throw new Error('Invalid daily report');
    const through=rows.at(-1)[0];if(through<addDays(end,-10))throw new Error('Analytics too old');
-   analyticsCache[c.key]={through,updatedAt:now.toISOString(),dailyViews:history(rows,addDays(through,-89),through)};
+   analyticsCache[c.key]={through,updatedAt:now.toISOString(),dailyViews:history(rows,addDays(through,-89),through),dailySubscribers:subscriberHistory(rows,addDays(through,-89),through)};
    console.log(`${c.name}: Analytics connected through ${through}`);
   }catch{console.warn(`${c.name}: Analytics refresh delayed or owner authorization required; cached values retained`);}
  }
