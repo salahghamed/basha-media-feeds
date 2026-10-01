@@ -5,11 +5,11 @@ import path from 'node:path';
 // This is the sole channel registry. IDs resolve from official handles once,
 // then remain pinned in the successful cache. Never infer channel ownership.
 export const channels = [
- {key:'androidbasha',name:'Android Basha',handle:'@AndroidBasha',credentialRef:'ANDROID_BASHA',order:1},
- {key:'camerabasha',name:'Camera Basha',handle:'@CameraBasha',credentialRef:'CAMERA_BASHA',order:2},
- {key:'bashapodcast',name:'BashaPodcast',handle:'@BashaPodcast',credentialRef:'BASHA_PODCAST',order:3},
- {key:'hifibasha',name:'HiFi Basha',handle:'@HiFiBasha',credentialRef:'HIFI_BASHA',order:4},
- {key:'gamingbasha',name:'Gaming Basha',handle:'@GamingBasha',credentialRef:'GAMING_BASHA',order:5}
+ {key:'androidbasha',channelId:'UCs8vDlWQQJb21sLh9jh1qWA',name:'Android Basha',handle:'@AndroidBasha',credentialRef:'ANDROID_BASHA',order:1},
+ {key:'camerabasha',channelId:'UCSg5-KvujMNs7nOj4WgLt3g',name:'Camera Basha',handle:'@CameraBasha',credentialRef:'CAMERA_BASHA',order:2},
+ {key:'bashapodcast',channelId:'UC06QeEDxxig1DOGrPxq3IJA',name:'BashaPodcast',handle:'@BashaPodcast',credentialRef:'BASHA_PODCAST',order:3},
+ {key:'hifibasha',channelId:'UCEOpbSlsyEkfGZWHns2nNhA',name:'HiFi Basha',handle:'@HiFiBasha',credentialRef:'HIFI_BASHA',order:4},
+ {key:'gamingbasha',channelId:'UCIWgNj19ia7sR7cxJkIKsLw',name:'Gaming Basha',handle:'@GamingBasha',credentialRef:'GAMING_BASHA',order:5}
 ];
 export const percent=(current,previous)=>previous===0?null:(current-previous)/previous*100;
 export const addDays=(date,n)=>new Date(Date.parse(date+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
@@ -45,7 +45,7 @@ async function readCache(env,key,fetcher){const r=await fetcher(kvURL(env,key),{
 async function writeCache(env,key,data,fetcher){await json(await fetcher(kvURL(env,key),{method:'PUT',headers:{Authorization:`Bearer ${env.CLOUDFLARE_API_TOKEN}`,'Content-Type':'application/octet-stream'},body:gzipSync(JSON.stringify(data))}));}
 export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=new Date()){
  const request=async(params)=>json(await fetcher('https://www.googleapis.com/youtube/v3/channels?'+new URLSearchParams(params),{headers:{'X-Goog-Api-Key':env.YOUTUBE_API_KEY},signal:AbortSignal.timeout(20000)}));
- for(const c of channels){if(publicCache[c.key]?.channelId)continue;try{const d=await request({part:'id',forHandle:c.handle});const id=d.items?.[0]?.id;if(/^UC[\w-]{22}$/.test(id||''))publicCache[c.key]={channelId:id};}catch{console.warn(`${c.name}: channel resolution pending`);}}
+ for(const c of channels){if(publicCache[c.key]?.channelId)continue;if(c.channelId){publicCache[c.key]={channelId:c.channelId};continue;}try{const d=await request({part:'id',forHandle:c.handle});const id=d.items?.[0]?.id;if(/^UC[\w-]{22}$/.test(id||''))publicCache[c.key]={channelId:id};}catch{console.warn(`${c.name}: channel resolution pending`);}}
  const ids=channels.map(c=>publicCache[c.key]?.channelId).filter(Boolean);
  let publicSuccess=false;
  if(ids.length)try{
