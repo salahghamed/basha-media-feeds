@@ -10,6 +10,6 @@ export default {
   const key=feeds[url.pathname];if(!key)return new Response('Not found',{status:404,headers});
   const value=await env.ARCHIVE.get(key,{type:'stream'});
   if(!value)return Response.json({error:'Feed awaits its first successful sync'},{status:503,headers:{...headers,'Cache-Control':'no-store'}});
-  return new Response(request.method==='HEAD'?null:value,{headers:{...headers,'Content-Type':'application/json;charset=utf-8','Content-Encoding':'gzip'}});
+  return new Response(request.method==='HEAD'?null:value,{encodeBody:'manual',headers:{...headers,'Content-Type':'application/json;charset=utf-8','Content-Encoding':'gzip'}});
  }
 };
