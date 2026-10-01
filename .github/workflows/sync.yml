@@ -39,6 +39,7 @@ jobs:
           console.log('YouTube access verified');
           NODE
           fi
+          cp sync.mjs sync-package/sync.mjs
           node sync-package/sync.mjs "${{ matrix.channel }}"
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
@@ -47,3 +48,4 @@ jobs:
           ARCHIVE_NAMESPACE_ID: ${{ vars.ARCHIVE_NAMESPACE_ID }}
           YOUTUBE_FULL_EPISODES_PLAYLIST_ID: ${{ vars.YOUTUBE_FULL_EPISODES_PLAYLIST_ID }}
           PODCAST_RSS_URL: https://anchor.fm/s/fdba5308/podcast/rss
+
