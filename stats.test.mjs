@@ -18,3 +18,12 @@ test('Complete days follow Analytics Pacific dates across midnight and leap year
 test('Google failure preserves last successful public and Analytics cache',async()=>{const original=structuredClone(pub),a=structuredClone(analytics);const result=await collect({YOUTUBE_API_KEY:'fake'},original,a,async()=>{throw new Error('offline');});assert.equal(result.publicSuccess,false);assert.deepEqual(result.publicCache,pub);assert.deepEqual(result.analyticsCache,analytics);});
 test('Public serialization only includes explicit safe fields',()=>{const p=structuredClone(pub);p.androidbasha.refreshToken='test-secret';p.androidbasha.revenue=900;const d=JSON.stringify(normalize(p,analytics));assert.ok(!d.includes('test-secret'));assert.ok(!d.includes('revenue'));assert.ok(!d.includes('refreshToken'));});
 test('Number formatting keeps calculations intact and handles unavailable data',()=>{const ctx=vm.createContext({});vm.runInContext(fs.readFileSync(new URL('./format.js',import.meta.url),'utf8'),ctx);for(const [n,expected] of [[999,'999'],[1200,'1.2K'],[87000,'87K'],[2130000,'2.13M'],[487600000,'487.6M'],[1240000000,'1.24B'],[null,'—']])assert.equal(vm.runInContext(`compactNumber(${JSON.stringify(n)})`,ctx),expected);});
+test('Watch hours and net growth use aligned periods; mismatched audience reports are withheld',()=>{
+ const a=structuredClone(analytics),c=a.androidbasha;
+ c.dailySubscribers=c.dailyViews.map((d,i)=>({date:d.date,gained:i>=60?4:2}));
+ c.dailyExtended=c.dailyViews.map((d,i)=>({date:d.date,lost:i>=60?5:1,minutes:i>=60?120:60}));
+ c.insights={through,countries:[{code:'JO',views:100}],topVideo:{id:'abcdefghijk',title:'Example',views:80}};
+ const r=normalize(pub,a).channels[0];assert.equal(r.watchHours30d,60);assert.equal(r.previousWatchHours30d,30);assert.equal(r.watchChangePercent,100);assert.equal(r.netSubscribers30d,-30);assert.equal(r.previousNetSubscribers30d,30);assert.equal(r.topCountries[0].code,'JO');
+ c.insights.through='2026-09-29';assert.equal(normalize(pub,a).channels[0].topCountries,null);
+ assert.equal(normalize(pub,analytics).channels[0].watchHours30d,null);
+});
