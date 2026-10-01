@@ -1,8 +1,15 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';import vm from 'node:vm';
-import {channels,percent,lastCompleteDay,history,normalize,collect,addDays} from './stats-sync.mjs';
+import {channels,percent,lastCompleteDay,history,normalize,collect,addDays,subscriberHistory} from './stats-sync.mjs';
 const through='2026-09-30',pub=Object.fromEntries(channels.map((c,i)=>[c.key,{channelId:'UC'+'x'.repeat(22),subscribers:100+i,totalViews:1000+i,updatedAt:'2026-10-01T12:00:00Z'}]));
 const analytics=Object.fromEntries(channels.map((c,i)=>[c.key,{through,updatedAt:'2026-10-01T12:00:00Z',dailyViews:history(Array.from({length:90},(_,n)=>[addDays(through,n-89),n>=60?(i+1)*20:(i+1)*10]),addDays(through,-89),through)}]));
+test('Subscriber gains compare adjacent periods and old caches remain unavailable',()=>{
+ const a=structuredClone(analytics);
+ for(const [i,c] of channels.entries())a[c.key].dailySubscribers=subscriberHistory(Array.from({length:90},(_,n)=>[addDays(through,n-89),0,n>=60?(i+1)*4:(i+1)*2]),addDays(through,-89),through);
+ const d=normalize(pub,a);assert.equal(d.channels[0].subscribersGained30d,120);assert.equal(d.channels[0].previousSubscribersGained30d,60);assert.equal(d.channels[0].subscriberChangePercent,100);assert.equal(d.channels[4].subscribersGained30d,600);
+ a.androidbasha.dailySubscribers=a.androidbasha.dailySubscribers.map(r=>({...r,gained:0}));const zero=normalize(pub,a).channels[0];assert.equal(zero.subscriberChangePercent,null);assert.equal(zero.subscribersGained30d,0);
+ assert.equal(normalize(pub,analytics).channels[0].subscribersGained30d,null);
+});
 test('Five-channel order and summed comparison are stable',()=>{const d=normalize(pub,analytics);assert.deepEqual(d.channels.map(c=>c.name),['Android Basha','Camera Basha','BashaPodcast','HiFi Basha','Gaming Basha']);assert.equal(d.network.subscribers,510);assert.equal(d.network.totalViews,5010);assert.equal(d.network.views30d,9000);assert.equal(d.network.previousViews30d,4500);assert.equal(d.network.changePercent,100);assert.deepEqual(d.periods,{current:{start:'2026-09-01',end:'2026-09-30'},previous:{start:'2026-08-02',end:'2026-08-31'}});});
 test('Missing authorization does not invent zero metrics or partial network totals',()=>{const d=normalize(pub,{androidbasha:analytics.androidbasha});assert.equal(d.network.views30d,null);assert.equal(d.channels[4].analyticsStatus,'connection-required');assert.equal(d.channels[4].views30d,null);assert.equal(d.channels.length,5);assert.equal(d.network.subscribers,510);});
 test('Network percentage uses summed views, rather than mean channel percentages',()=>{const a=structuredClone(analytics);a.androidbasha.dailyViews=a.androidbasha.dailyViews.map((d,i)=>({...d,views:i>=60?1000:2000}));const d=normalize(pub,a);assert.equal(d.network.changePercent,percent(d.network.views30d,d.network.previousViews30d));assert.notEqual(d.network.changePercent,d.channels.reduce((s,c)=>s+c.changePercent,0)/5);});
