@@ -1,5 +1,5 @@
 // Public reads only. GitHub builds and uploads compressed feeds separately.
-const feeds = {'/graph.json':'android:graph:gzip','/camera/catalog.json':'camera:catalog:gzip','/podcast/episodes.json':'podcast:episodes:gzip'};
+const feeds = {'/graph.json':'android:graph:gzip','/camera/catalog.json':'camera:catalog:gzip','/podcast/episodes.json':'podcast:episodes:gzip','/live/stats.json':'stats:dashboard:gzip'};
 export default {
  async fetch(request,env){
   const url=new URL(request.url),origin=request.headers.get('Origin');
