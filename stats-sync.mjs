@@ -103,7 +103,7 @@ export function normalize(publicCache,analyticsCache,now=new Date()){
   periods:analyticsThrough?{current:{start:addDays(analyticsThrough,-29),end:analyticsThrough},previous:{start:addDays(analyticsThrough,-59),end:addDays(analyticsThrough,-30)}}:null,
   network:{subscribers:sum(normalized,'subscribers'),totalViews:sum(normalized,'totalViews'),views30d,previousViews30d,changePercent:views30d===null?null:percent(views30d,previousViews30d),analyticsChannels:normalized.filter(c=>c.analyticsStatus==='connected').length},channels:normalized};
 }
-async function json(response){if(!response.ok)throw new Error('Upstream request failed');const data=await response.json();if(data.error)throw new Error('Upstream rejected request');return data;}
+async function json(response){if(!response.ok)throw new Error('Upstream HTTP '+response.status);const data=await response.json();if(data.error)throw new Error('Upstream rejected request');return data;}
 function kvURL(env,key){for(const n of ['CLOUDFLARE_ACCOUNT_ID','ARCHIVE_NAMESPACE_ID'])if(!/^[a-f0-9]{32}$/i.test(env[n]||''))throw new Error('Missing storage configuration');return `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces/${env.ARCHIVE_NAMESPACE_ID}/values/${encodeURIComponent(key)}`;}
 async function readCache(env,key,fetcher){const r=await fetcher(kvURL(env,key),{headers:{Authorization:`Bearer ${env.CLOUDFLARE_API_TOKEN}`}});if(r.status===404)return {};if(!r.ok)throw new Error('Cache unavailable; refusing to replace previous data');return JSON.parse(gunzipSync(Buffer.from(await r.arrayBuffer())));}
 async function writeCache(env,key,data,fetcher){await json(await fetcher(kvURL(env,key),{method:'PUT',headers:{Authorization:`Bearer ${env.CLOUDFLARE_API_TOKEN}`,'Content-Type':'application/octet-stream'},body:gzipSync(JSON.stringify(data))}));}
@@ -135,7 +135,7 @@ export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=n
    const through=rows.at(-1)[0];if(through<addDays(end,-10))throw new Error('Analytics too old');
    analyticsCache[c.key]={through,updatedAt:now.toISOString(),monthlyHistory:calendarHistory(rows,start,through),dailyViews:history(rows,addDays(through,-89),through),dailySubscribers:subscriberHistory(rows,addDays(through,-89),through),dailyExtended:extendedHistory(rows,addDays(through,-89),through),insights:cached?.insights??null};
    console.log(`${c.name}: Analytics connected through ${through}`);
-  }catch{console.warn(`${c.name}: Analytics refresh delayed or owner authorization required; cached values retained`);}
+  }catch(error){const reason=/^(Upstream HTTP [0-9]{3}|Upstream rejected request|Invalid report page|Invalid daily report|Invalid report ordering|Analytics pending|Analytics too old|Daily report exceeded bounded history window)$/.test(error.message)?error.message:"Upstream unavailable";console.warn(`${c.name}: ${reason}; cached values retained`);}
  }
  const alignedThrough=normalize(publicCache,analyticsCache,now).analyticsThrough;
  for(const c of channels){const access=tokens.get(c.key),a=analyticsCache[c.key];if(!access||!a||!alignedThrough)continue;
