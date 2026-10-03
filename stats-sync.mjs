@@ -15,7 +15,10 @@ export function contentFormatHistory(rows,totals){
  if(!Array.isArray(rows)||rows.length>2000||!Array.isArray(totals)||!totals.length)throw new Error('Invalid content format report');
  const grouped=new Map(),seen=new Set(),first=totals[0].date,last=totals.at(-1).date;
  for(const row of rows){
-  const [date,type,views]=row,identity=date+'|'+type;
+  const [date,reportedType,views]=row;
+  // Live Analytics responses use camelCase values; Google's dimension
+  // reference also lists the equivalent uppercase enum names.
+  const type=({videoOnDemand:'VIDEO_ON_DEMAND',shorts:'SHORTS',liveStream:'LIVE_STREAM',story:'STORY',unspecified:'UNSPECIFIED'})[reportedType]||reportedType,identity=date+'|'+type;
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||date<first||date>last)throw new Error('Invalid content format dates');
   if(!['VIDEO_ON_DEMAND','SHORTS','LIVE_STREAM','STORY','UNSPECIFIED'].includes(type))throw new Error('Invalid content format type');
   if(!Number.isSafeInteger(views)||views<0||seen.has(identity))throw new Error('Invalid content format counts');
@@ -172,7 +175,6 @@ export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=n
   try{
    const response=await json(await fetcher('https://youtubeanalytics.googleapis.com/v2/reports?'+new URLSearchParams({ids:'channel=='+publicCache[c.key].channelId,startDate:a.monthlyHistory[0].date,endDate:a.through,metrics:'views',dimensions:'day,creatorContentType',sort:'day',maxResults:'2500'}),{headers:{Authorization:'Bearer '+access},signal:AbortSignal.timeout(30000)}));
    const formatRows=contentFormatRows(response);
-   console.log(c.name+': content format categories '+JSON.stringify([...new Set(formatRows.map(r=>String(r[1])))].map(type=>/^[A-Za-z0-9_-]{1,50}$/.test(type)?type:'unknown')));
    const split=contentFormatHistory(formatRows,a.monthlyHistory);
    // Preserve verified cached days if a new response temporarily omits them.
    const previous=new Map((a.contentFormatHistory||[]).map(d=>[d.date,d]));
