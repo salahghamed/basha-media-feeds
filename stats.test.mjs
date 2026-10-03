@@ -50,8 +50,8 @@ test('Monthly comparisons never divide by zero, and old daily caches can supply 
  const cache={dailyViews:days.map(d=>({date:d.date,views:d.views})),dailySubscribers:days.map(d=>({date:d.date,gained:d.gained})),dailyExtended:days.map(d=>({date:d.date,lost:d.lost,minutes:d.minutes}))};
  assert.deepEqual(calendarSummaries(cache,'2026-09-30'),result);
 });
-test('Daily history paginates and rejects a response beyond the bounded history window',async()=>{
- const indexes=[];const result=await paginatedDailyReport(async p=>{indexes.push(p.startIndex);return {rows:Array.from({length:p.startIndex==='1'?200:17},(_,i)=>[i])};});
- assert.equal(result.length,217);assert.deepEqual(indexes,['1','201']);
- await assert.rejects(paginatedDailyReport(async()=>({rows:Array.from({length:200},()=>[])})),/bounded/);
+test('Daily report requests the whole bounded history rather than truncating at 200 days',async()=>{
+ const requests=[];const result=await paginatedDailyReport(async p=>{requests.push(p);return {rows:Array.from({length:367},(_,i)=>[i])};});
+ assert.equal(result.length,367);assert.deepEqual(requests,[{maxResults:'500'}]);
+ await assert.rejects(paginatedDailyReport(async()=>({rows:Array.from({length:401},()=>[])})),/bounded/);
 });
