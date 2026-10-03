@@ -40,13 +40,11 @@ export function calendarSummaries(cache,through){
  return summaries.slice(-13).reverse();
 }
 export async function paginatedDailyReport(request){
- const all=[];
- for(let page=0;page<4;page++){
-  const response=await request({maxResults:'200',startIndex:String(page*200+1)}),rows=response.rows||[];
-  if(!Array.isArray(rows)||rows.length>200)throw new Error('Invalid report page');
-  all.push(...rows);if(rows.length<200)return all;
- }
- throw new Error('Daily report exceeded bounded history window');
+ // A 13-calendar-month daily report has fewer than 400 rows. Request the
+ // entire bounded period so a capped response cannot look like a current month.
+ const response=await request({maxResults:'500'}),rows=response.rows||[];
+ if(!Array.isArray(rows)||rows.length>400)throw new Error('Daily report exceeded bounded history window');
+ return rows;
 }
 
 
