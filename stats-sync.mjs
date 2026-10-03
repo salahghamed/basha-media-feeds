@@ -2,6 +2,28 @@ import {gzipSync,gunzipSync} from 'node:zlib';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 
+const formatKeys=['regular','shorts','other'];
+const validCounts=d=>formatKeys.every(k=>Number.isSafeInteger(d?.[k])&&d[k]>=0);
+export function contentFormatHistory(rows,totals){
+ if(!Array.isArray(rows)||rows.length>2000||!Array.isArray(totals)||!totals.length)throw new Error('Invalid content format report');
+ const grouped=new Map(),seen=new Set(),first=totals[0].date,last=totals.at(-1).date;
+ for(const row of rows){
+  const [date,type,views]=row,identity=date+'|'+type;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||date<first||date>last||!['VIDEO_ON_DEMAND','SHORTS','LIVE_STREAM','STORY','UNSPECIFIED'].includes(type)||!Number.isSafeInteger(views)||views<0||seen.has(identity))throw new Error('Invalid content format report');
+  seen.add(identity);if(!grouped.has(date))grouped.set(date,{date,regular:0,shorts:0,other:0});
+  grouped.get(date)[type==='VIDEO_ON_DEMAND'?'regular':type==='SHORTS'?'shorts':'other']+=views;
+ }
+ // Reconcile every day against the all-format report. Missing format data
+ // must never silently become zero or be counted as a regular video.
+ return totals.map(d=>{const split=grouped.get(d.date)||{date:d.date,regular:0,shorts:0,other:0};return validCounts(split)&&split.regular+split.shorts+split.other===d.views?split:{date:d.date,regular:null,shorts:null,other:null};});
+}
+export function contentFormatWindow(cache,start,end){
+ if(!start||!end||!Array.isArray(cache?.contentFormatHistory))return null;
+ const days=cache.contentFormatHistory.filter(d=>d.date>=start&&d.date<=end),expected=Math.round((Date.parse(end+'T12:00:00Z')-Date.parse(start+'T12:00:00Z'))/86400000)+1;
+ if(days.length!==expected||new Set(days.map(d=>d.date)).size!==expected||days.some(d=>!validCounts(d)))return null;
+ return Object.fromEntries(formatKeys.map(k=>[k,days.reduce((sum,d)=>sum+d[k],0)]));
+}
+
 export const monthStart=(date,offset=0)=>{
  const [year,month]=date.split('-').map(Number);
  return new Date(Date.UTC(year,month-1+offset,1,12)).toISOString().slice(0,10);
@@ -93,7 +115,9 @@ export function normalize(publicCache,analyticsCache,now=new Date()){
   const watchHours30d=extraReady?aggregate('minutes')/60:null,previousWatchHours30d=extraReady?aggregate('minutes',true)/60:null;
   const netSubscribers30d=extraReady&&subsReady?subscribersGained30d-aggregate('lost'):null,previousNetSubscribers30d=extraReady&&subsReady?previousSubscribersGained30d-aggregate('lost',true):null;
   const insights=a?.insights?.through===analyticsThrough?a.insights:null;
-  return {monthlySummaries:calendarSummaries(a,a?.through),watchHours30d,previousWatchHours30d,watchChangePercent:watchHours30d===null?null:percent(watchHours30d,previousWatchHours30d),netSubscribers30d,previousNetSubscribers30d,topCountries:insights?.countries??null,topVideo:insights?.topVideo??null,insightsThrough:insights?.through??null,key:c.key,name:c.name,order:c.order,channelId:pub.channelId||null,thumbnail:pub.thumbnail||null,subscribers:pub.subscribers??null,totalViews:pub.totalViews??null,publicUpdatedAt:pub.updatedAt||null,analyticsUpdatedAt:a?.updatedAt||null,analyticsStatus:ready?'connected':'connection-required',analyticsThrough:ready?analyticsThrough:null,views30d,previousViews30d,changePercent:ready?percent(views30d,previousViews30d):null,subscribersGained30d,previousSubscribersGained30d,subscriberChangePercent:subsReady?percent(subscribersGained30d,previousSubscribersGained30d):null,dailyViews};
+  const viewsByFormat30d=ready?contentFormatWindow(a,addDays(analyticsThrough,-29),analyticsThrough):null;
+  const dailyViewsByFormat=ready&&contentFormatWindow(a,addDays(analyticsThrough,-59),analyticsThrough)?a.contentFormatHistory.filter(d=>d.date>=addDays(analyticsThrough,-59)&&d.date<=analyticsThrough):[];
+  return {viewsByFormat30d,dailyViewsByFormat,monthlySummaries:calendarSummaries(a,a?.through).map(s=>({...s,viewsByFormat:contentFormatWindow(a,s.start,s.end)})),watchHours30d,previousWatchHours30d,watchChangePercent:watchHours30d===null?null:percent(watchHours30d,previousWatchHours30d),netSubscribers30d,previousNetSubscribers30d,topCountries:insights?.countries??null,topVideo:insights?.topVideo??null,insightsThrough:insights?.through??null,key:c.key,name:c.name,order:c.order,channelId:pub.channelId||null,thumbnail:pub.thumbnail||null,subscribers:pub.subscribers??null,totalViews:pub.totalViews??null,publicUpdatedAt:pub.updatedAt||null,analyticsUpdatedAt:a?.updatedAt||null,analyticsStatus:ready?'connected':'connection-required',analyticsThrough:ready?analyticsThrough:null,views30d,previousViews30d,changePercent:ready?percent(views30d,previousViews30d):null,subscribersGained30d,previousSubscribersGained30d,subscriberChangePercent:subsReady?percent(subscribersGained30d,previousSubscribersGained30d):null,dailyViews};
  });
  const views30d=sum(normalized,'views30d'),previousViews30d=sum(normalized,'previousViews30d');
  const publicTimes=normalized.map(c=>c.publicUpdatedAt).filter(Boolean).sort();
@@ -121,7 +145,7 @@ export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=n
  for(const c of channels){
   const refresh=env[c.credentialRef+'_REFRESH_TOKEN'],cached=analyticsCache[c.key];
   if(!refresh||!env.GOOGLE_OAUTH_CLIENT_ID||!env.GOOGLE_OAUTH_CLIENT_SECRET||!publicCache[c.key]?.channelId)continue;
-  if(cached?.dailyExtended?.length===90&&cached?.monthlyHistory?.length>=90&&cached?.insights?.through===cached.through&&now-new Date(cached.updatedAt)<6*3600000)continue;
+  if(cached?.dailyExtended?.length===90&&cached?.monthlyHistory?.length>=90&&cached?.insights?.through===cached.through&&cached?.contentFormatHistory?.length>=90&&now-new Date(cached.contentFormatUpdatedAt)<6*3600000&&now-new Date(cached.updatedAt)<6*3600000)continue;
   try{
    const token=await json(await fetcher('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:env.GOOGLE_OAUTH_CLIENT_ID,client_secret:env.GOOGLE_OAUTH_CLIENT_SECRET,refresh_token:refresh,grant_type:'refresh_token'}),signal:AbortSignal.timeout(20000)}));
    tokens.set(c.key,token.access_token);
@@ -131,9 +155,20 @@ export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=n
    if(rows.some(r=>!/^\d{4}-\d{2}-\d{2}$/.test(r[0])||!Number.isSafeInteger(r[1])||r[1]<0||!Number.isSafeInteger(r[2])||r[2]<0||!Number.isSafeInteger(r[3])||r[3]<0||!Number.isFinite(r[4])||r[4]<0||r[0]<start||r[0]>end))throw new Error('Invalid daily report');
    if(new Set(rows.map(r=>r[0])).size!==rows.length||rows.some((r,i)=>i&&r[0]<=rows[i-1][0]))throw new Error('Invalid report ordering');
    const through=rows.at(-1)[0];if(through<addDays(end,-10))throw new Error('Analytics too old');
-   analyticsCache[c.key]={through,updatedAt:now.toISOString(),monthlyHistory:calendarHistory(rows,start,through),dailyViews:history(rows,addDays(through,-89),through),dailySubscribers:subscriberHistory(rows,addDays(through,-89),through),dailyExtended:extendedHistory(rows,addDays(through,-89),through),insights:cached?.insights??null};
+   analyticsCache[c.key]={contentFormatHistory:cached?.contentFormatHistory??null,contentFormatUpdatedAt:cached?.contentFormatUpdatedAt??null,through,updatedAt:now.toISOString(),monthlyHistory:calendarHistory(rows,start,through),dailyViews:history(rows,addDays(through,-89),through),dailySubscribers:subscriberHistory(rows,addDays(through,-89),through),dailyExtended:extendedHistory(rows,addDays(through,-89),through),insights:cached?.insights??null};
    console.log(`${c.name}: Analytics connected through ${through}`);
   }catch(error){const reason=/^(Upstream HTTP [0-9]{3}|Upstream rejected request|Invalid report page|Invalid daily report|Invalid report ordering|Analytics pending|Analytics too old|Daily report exceeded bounded history window)$/.test(error.message)?error.message:"Upstream unavailable";console.warn(`${c.name}: ${reason}; cached values retained`);}
+ }
+ for(const c of channels){const access=tokens.get(c.key),a=analyticsCache[c.key];if(!access||!a?.monthlyHistory)continue;
+  try{
+   const response=await json(await fetcher('https://youtubeanalytics.googleapis.com/v2/reports?'+new URLSearchParams({ids:'channel=='+publicCache[c.key].channelId,startDate:a.monthlyHistory[0].date,endDate:a.through,metrics:'views',dimensions:'day,creatorContentType',sort:'day',maxResults:'2500'}),{headers:{Authorization:'Bearer '+access},signal:AbortSignal.timeout(30000)}));
+   const split=contentFormatHistory(response.rows||[],a.monthlyHistory);
+   // Preserve verified cached days if a new response temporarily omits them.
+   const previous=new Map((a.contentFormatHistory||[]).map(d=>[d.date,d]));
+   a.contentFormatHistory=split.map(d=>validCounts(d)?d:validCounts(previous.get(d.date))&&formatKeys.reduce((sum,k)=>sum+previous.get(d.date)[k],0)===a.monthlyHistory.find(t=>t.date===d.date)?.views?previous.get(d.date):d);
+   a.contentFormatUpdatedAt=now.toISOString();
+   console.log(c.name+': content format views connected ('+split.filter(validCounts).length+'/'+split.length+' reconciled days)');
+  }catch(error){const reason=/^(Upstream HTTP [0-9]{3}|Upstream rejected request|Invalid content format report)$/.test(error.message)?error.message:'Upstream unavailable';console.warn(c.name+': content format breakdown '+reason+'; previous snapshot retained');}
  }
  const alignedThrough=normalize(publicCache,analyticsCache,now).analyticsThrough;
  for(const c of channels){const access=tokens.get(c.key),a=analyticsCache[c.key];if(!access||!a||!alignedThrough)continue;
