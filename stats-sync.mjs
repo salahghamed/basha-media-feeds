@@ -35,6 +35,20 @@ export function contentFormatWindow(cache,start,end){
  if(days.length!==expected||new Set(days.map(d=>d.date)).size!==expected||days.some(d=>!validCounts(d)))return null;
  return Object.fromEntries(formatKeys.map(k=>[k,days.reduce((sum,d)=>sum+d[k],0)]));
 }
+const formatDateOffset=(date,n)=>new Date(Date.parse(date+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
+export function latestFormatThrough(cache){
+ if(!cache?.through)return null;
+ for(let gap=0;gap<=14;gap++){const end=formatDateOffset(cache.through,-gap);if(contentFormatWindow(cache,formatDateOffset(end,-59),end))return end;}
+ return null;
+}
+export function monthlyContentFormats(cache,summary){
+ for(let gap=0;gap<=14;gap++){
+  const end=formatDateOffset(summary.end,-gap);if(end<summary.start)break;
+  const split=contentFormatWindow(cache,summary.start,end);
+  if(split)return {viewsByFormat:split,formatThrough:end,formatViews:formatKeys.reduce((sum,k)=>sum+split[k],0)};
+ }
+ return {viewsByFormat:null,formatThrough:null,formatViews:null};
+}
 
 export const monthStart=(date,offset=0)=>{
  const [year,month]=date.split('-').map(Number);
@@ -117,6 +131,7 @@ const sum=(rows,field)=>rows.every(c=>Number.isSafeInteger(c[field]))?rows.reduc
 export function normalize(publicCache,analyticsCache,now=new Date()){
  const available=channels.map(c=>analyticsCache[c.key]).filter(a=>a?.dailyViews?.length===90);
  const analyticsThrough=available.length?available.map(a=>a.through).sort()[0]:null;
+ const formatCutoffs=channels.map(c=>latestFormatThrough(analyticsCache[c.key])).filter(Boolean),formatThrough=formatCutoffs.length?formatCutoffs.sort()[0]:null;
  const normalized=channels.map(c=>{
   const pub=publicCache[c.key]||{},a=analyticsCache[c.key],dailyViews=a&&analyticsThrough&&a.dailyViews[0].date<=addDays(analyticsThrough,-59)?a.dailyViews.filter(d=>d.date>=addDays(analyticsThrough,-59)&&d.date<=analyticsThrough):[];
   const ready=dailyViews.length===60,views30d=ready?dailyViews.slice(-30).reduce((n,d)=>n+d.views,0):null,previousViews30d=ready?dailyViews.slice(0,30).reduce((n,d)=>n+d.views,0):null;
@@ -127,13 +142,14 @@ export function normalize(publicCache,analyticsCache,now=new Date()){
   const watchHours30d=extraReady?aggregate('minutes')/60:null,previousWatchHours30d=extraReady?aggregate('minutes',true)/60:null;
   const netSubscribers30d=extraReady&&subsReady?subscribersGained30d-aggregate('lost'):null,previousNetSubscribers30d=extraReady&&subsReady?previousSubscribersGained30d-aggregate('lost',true):null;
   const insights=a?.insights?.through===analyticsThrough?a.insights:null;
-  const viewsByFormat30d=ready?contentFormatWindow(a,addDays(analyticsThrough,-29),analyticsThrough):null;
-  const dailyViewsByFormat=ready&&contentFormatWindow(a,addDays(analyticsThrough,-59),analyticsThrough)?a.contentFormatHistory.filter(d=>d.date>=addDays(analyticsThrough,-59)&&d.date<=analyticsThrough):[];
-  return {viewsByFormat30d,dailyViewsByFormat,monthlySummaries:calendarSummaries(a,a?.through).map(s=>({...s,viewsByFormat:contentFormatWindow(a,s.start,s.end)})),watchHours30d,previousWatchHours30d,watchChangePercent:watchHours30d===null?null:percent(watchHours30d,previousWatchHours30d),netSubscribers30d,previousNetSubscribers30d,topCountries:insights?.countries??null,topVideo:insights?.topVideo??null,insightsThrough:insights?.through??null,key:c.key,name:c.name,order:c.order,channelId:pub.channelId||null,thumbnail:pub.thumbnail||null,subscribers:pub.subscribers??null,totalViews:pub.totalViews??null,publicUpdatedAt:pub.updatedAt||null,analyticsUpdatedAt:a?.updatedAt||null,analyticsStatus:ready?'connected':'connection-required',analyticsThrough:ready?analyticsThrough:null,views30d,previousViews30d,changePercent:ready?percent(views30d,previousViews30d):null,subscribersGained30d,previousSubscribersGained30d,subscriberChangePercent:subsReady?percent(subscribersGained30d,previousSubscribersGained30d):null,dailyViews};
+  const viewsByFormat30d=formatThrough?contentFormatWindow(a,addDays(formatThrough,-29),formatThrough):null;
+  const formatViews30d=viewsByFormat30d?formatKeys.reduce((sum,k)=>sum+viewsByFormat30d[k],0):null;
+  const dailyViewsByFormat=formatThrough&&contentFormatWindow(a,addDays(formatThrough,-59),formatThrough)?a.contentFormatHistory.filter(d=>d.date>=addDays(formatThrough,-59)&&d.date<=formatThrough).map(d=>({...d,views:formatKeys.reduce((sum,k)=>sum+d[k],0)})):[];
+  return {viewsByFormat30d,formatViews30d,formatThrough:viewsByFormat30d?formatThrough:null,dailyViewsByFormat,monthlySummaries:calendarSummaries(a,a?.through).map(s=>({...s,...monthlyContentFormats(a,s)})),watchHours30d,previousWatchHours30d,watchChangePercent:watchHours30d===null?null:percent(watchHours30d,previousWatchHours30d),netSubscribers30d,previousNetSubscribers30d,topCountries:insights?.countries??null,topVideo:insights?.topVideo??null,insightsThrough:insights?.through??null,key:c.key,name:c.name,order:c.order,channelId:pub.channelId||null,thumbnail:pub.thumbnail||null,subscribers:pub.subscribers??null,totalViews:pub.totalViews??null,publicUpdatedAt:pub.updatedAt||null,analyticsUpdatedAt:a?.updatedAt||null,analyticsStatus:ready?'connected':'connection-required',analyticsThrough:ready?analyticsThrough:null,views30d,previousViews30d,changePercent:ready?percent(views30d,previousViews30d):null,subscribersGained30d,previousSubscribersGained30d,subscriberChangePercent:subsReady?percent(subscribersGained30d,previousSubscribersGained30d):null,dailyViews};
  });
  const views30d=sum(normalized,'views30d'),previousViews30d=sum(normalized,'previousViews30d');
  const publicTimes=normalized.map(c=>c.publicUpdatedAt).filter(Boolean).sort();
- return {schemaVersion:1,updatedAt:publicTimes.at(-1)||null,checkedAt:now.toISOString(),timezone:'Asia/Amman',analyticsTimezone:'America/Los_Angeles',analyticsThrough,
+ return {formatPeriods:formatThrough?{current:{start:addDays(formatThrough,-29),end:formatThrough},previous:{start:addDays(formatThrough,-59),end:addDays(formatThrough,-30)}}:null,schemaVersion:1,updatedAt:publicTimes.at(-1)||null,checkedAt:now.toISOString(),timezone:'Asia/Amman',analyticsTimezone:'America/Los_Angeles',analyticsThrough,
   periods:analyticsThrough?{current:{start:addDays(analyticsThrough,-29),end:analyticsThrough},previous:{start:addDays(analyticsThrough,-59),end:addDays(analyticsThrough,-30)}}:null,
   network:{subscribers:sum(normalized,'subscribers'),totalViews:sum(normalized,'totalViews'),views30d,previousViews30d,changePercent:views30d===null?null:percent(views30d,previousViews30d),analyticsChannels:normalized.filter(c=>c.analyticsStatus==='connected').length},channels:normalized};
 }
@@ -181,6 +197,7 @@ export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=n
    a.contentFormatHistory=split.map(d=>validCounts(d)?d:validCounts(previous.get(d.date))&&formatKeys.reduce((sum,k)=>sum+previous.get(d.date)[k],0)===a.monthlyHistory.find(t=>t.date===d.date)?.views?previous.get(d.date):d);
    a.contentFormatUpdatedAt=now.toISOString();
    console.log(c.name+': content format views connected ('+split.filter(validCounts).length+'/'+split.length+' reconciled days)');
+   console.log(c.name+': format dates awaiting reconciliation '+JSON.stringify(split.filter(d=>!validCounts(d)).map(d=>d.date)));
   }catch(error){const reason=/^(Upstream HTTP [0-9]{3}|Upstream rejected request|Invalid content format (report|columns|dates|type|counts))$/.test(error.message)?error.message:'Upstream unavailable';console.warn(c.name+': content format breakdown '+reason+'; previous snapshot retained');}
  }
  const alignedThrough=normalize(publicCache,analyticsCache,now).analyticsThrough;
