@@ -61,11 +61,13 @@ test('A delayed channel cannot freeze calendar-month summaries for current chann
  const out=normalize(pub,cache);assert.equal(out.analyticsThrough,'2026-09-28');assert.equal(out.channels[0].monthlySummaries[0].end,'2026-09-28');assert.equal(out.channels[1].monthlySummaries[0].month,'2026-10');assert.equal(out.channels[1].monthlySummaries[1].complete,true);
 });
 
-import {contentFormatHistory,contentFormatWindow} from './stats-sync.mjs';
+import {contentFormatHistory,contentFormatWindow,contentFormatRows} from './stats-sync.mjs';
 test('Format classification keeps regular videos, Shorts and livestreams distinct',()=>{
  const split=contentFormatHistory([['2026-09-01','VIDEO_ON_DEMAND',50],['2026-09-01','SHORTS',30],['2026-09-01','LIVE_STREAM',10],['2026-09-01','UNSPECIFIED',5],['2026-09-01','STORY',5]],[{date:'2026-09-01',views:100}]);
  assert.deepEqual(split,[{date:'2026-09-01',regular:50,shorts:30,other:20}]);
  assert.deepEqual(contentFormatWindow({contentFormatHistory:split},'2026-09-01','2026-09-01'),{regular:50,shorts:30,other:20});
+ assert.deepEqual(contentFormatRows({columnHeaders:[{name:'creatorContentType'},{name:'day'},{name:'views'}],rows:[['SHORTS','2026-09-01',30]]}),[['2026-09-01','SHORTS',30]]);
+ assert.deepEqual(contentFormatHistory([['2026-09-01','videoOnDemand',50],['2026-09-01','shorts',30],['2026-09-01','liveStream',20]],[{date:'2026-09-01',views:100}]),split);
 });
 test('Unreconciled or missing breakdowns remain unavailable instead of invented zero',()=>{
  const totals=[{date:'2026-09-01',views:100},{date:'2026-09-02',views:0}],split=contentFormatHistory([['2026-09-01','SHORTS',50]],totals);
@@ -94,7 +96,7 @@ test('Format collection queries official content types and preserves totals on f
   if(url.includes('/v3/channels'))return Response.json({items:[]});
   const q=new URL(url).searchParams;queries.push(q);
   if(q.get('dimensions')==='day')return Response.json({rows:days.map(d=>[d.date,10,0,0,0])});
-  if(q.get('dimensions')==='day,creatorContentType')return Response.json({rows:days.flatMap(d=>[[d.date,'VIDEO_ON_DEMAND',7],[d.date,'SHORTS',3]])});
+  if(q.get('dimensions')==='day,creatorContentType')return Response.json({columnHeaders:[{name:'creatorContentType'},{name:'day'},{name:'views'}],rows:days.flatMap(d=>[['videoOnDemand',d.date,7],['shorts',d.date,3]])});
   return Response.json({rows:[]});
  };
  const result=await collect(env,structuredClone(pub),{},fetcher,now);
