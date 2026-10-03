@@ -4,12 +4,21 @@ import path from 'node:path';
 
 const formatKeys=['regular','shorts','other'];
 const validCounts=d=>formatKeys.every(k=>Number.isSafeInteger(d?.[k])&&d[k]>=0);
+export function contentFormatRows(response){
+ const names=response.columnHeaders?.map(h=>h.name),rows=response.rows||[];
+ if(!names)return rows;
+ const indices=['day','creatorContentType','views'].map(name=>names.indexOf(name));
+ if(indices.some(i=>i<0))throw new Error('Invalid content format columns');
+ return rows.map(row=>indices.map(i=>row[i]));
+}
 export function contentFormatHistory(rows,totals){
  if(!Array.isArray(rows)||rows.length>2000||!Array.isArray(totals)||!totals.length)throw new Error('Invalid content format report');
  const grouped=new Map(),seen=new Set(),first=totals[0].date,last=totals.at(-1).date;
  for(const row of rows){
   const [date,type,views]=row,identity=date+'|'+type;
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||date<first||date>last||!['VIDEO_ON_DEMAND','SHORTS','LIVE_STREAM','STORY','UNSPECIFIED'].includes(type)||!Number.isSafeInteger(views)||views<0||seen.has(identity))throw new Error('Invalid content format report');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||date<first||date>last)throw new Error('Invalid content format dates');
+  if(!['VIDEO_ON_DEMAND','SHORTS','LIVE_STREAM','STORY','UNSPECIFIED'].includes(type))throw new Error('Invalid content format type');
+  if(!Number.isSafeInteger(views)||views<0||seen.has(identity))throw new Error('Invalid content format counts');
   seen.add(identity);if(!grouped.has(date))grouped.set(date,{date,regular:0,shorts:0,other:0});
   grouped.get(date)[type==='VIDEO_ON_DEMAND'?'regular':type==='SHORTS'?'shorts':'other']+=views;
  }
@@ -162,13 +171,13 @@ export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=n
  for(const c of channels){const access=tokens.get(c.key),a=analyticsCache[c.key];if(!access||!a?.monthlyHistory)continue;
   try{
    const response=await json(await fetcher('https://youtubeanalytics.googleapis.com/v2/reports?'+new URLSearchParams({ids:'channel=='+publicCache[c.key].channelId,startDate:a.monthlyHistory[0].date,endDate:a.through,metrics:'views',dimensions:'day,creatorContentType',sort:'day',maxResults:'2500'}),{headers:{Authorization:'Bearer '+access},signal:AbortSignal.timeout(30000)}));
-   const split=contentFormatHistory(response.rows||[],a.monthlyHistory);
+   const split=contentFormatHistory(contentFormatRows(response),a.monthlyHistory);
    // Preserve verified cached days if a new response temporarily omits them.
    const previous=new Map((a.contentFormatHistory||[]).map(d=>[d.date,d]));
    a.contentFormatHistory=split.map(d=>validCounts(d)?d:validCounts(previous.get(d.date))&&formatKeys.reduce((sum,k)=>sum+previous.get(d.date)[k],0)===a.monthlyHistory.find(t=>t.date===d.date)?.views?previous.get(d.date):d);
    a.contentFormatUpdatedAt=now.toISOString();
    console.log(c.name+': content format views connected ('+split.filter(validCounts).length+'/'+split.length+' reconciled days)');
-  }catch(error){const reason=/^(Upstream HTTP [0-9]{3}|Upstream rejected request|Invalid content format report)$/.test(error.message)?error.message:'Upstream unavailable';console.warn(c.name+': content format breakdown '+reason+'; previous snapshot retained');}
+  }catch(error){const reason=/^(Upstream HTTP [0-9]{3}|Upstream rejected request|Invalid content format (report|columns|dates|type|counts))$/.test(error.message)?error.message:'Upstream unavailable';console.warn(c.name+': content format breakdown '+reason+'; previous snapshot retained');}
  }
  const alignedThrough=normalize(publicCache,analyticsCache,now).analyticsThrough;
  for(const c of channels){const access=tokens.get(c.key),a=analyticsCache[c.key];if(!access||!a||!alignedThrough)continue;
