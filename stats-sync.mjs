@@ -171,7 +171,9 @@ export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=n
  for(const c of channels){const access=tokens.get(c.key),a=analyticsCache[c.key];if(!access||!a?.monthlyHistory)continue;
   try{
    const response=await json(await fetcher('https://youtubeanalytics.googleapis.com/v2/reports?'+new URLSearchParams({ids:'channel=='+publicCache[c.key].channelId,startDate:a.monthlyHistory[0].date,endDate:a.through,metrics:'views',dimensions:'day,creatorContentType',sort:'day',maxResults:'2500'}),{headers:{Authorization:'Bearer '+access},signal:AbortSignal.timeout(30000)}));
-   const split=contentFormatHistory(contentFormatRows(response),a.monthlyHistory);
+   const formatRows=contentFormatRows(response);
+   console.log(c.name+': content format categories '+JSON.stringify([...new Set(formatRows.map(r=>String(r[1])))].map(type=>/^[A-Za-z0-9_-]{1,50}$/.test(type)?type:'unknown')));
+   const split=contentFormatHistory(formatRows,a.monthlyHistory);
    // Preserve verified cached days if a new response temporarily omits them.
    const previous=new Map((a.contentFormatHistory||[]).map(d=>[d.date,d]));
    a.contentFormatHistory=split.map(d=>validCounts(d)?d:validCounts(previous.get(d.date))&&formatKeys.reduce((sum,k)=>sum+previous.get(d.date)[k],0)===a.monthlyHistory.find(t=>t.date===d.date)?.views?previous.get(d.date):d);
