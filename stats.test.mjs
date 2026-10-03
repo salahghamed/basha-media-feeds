@@ -60,3 +60,46 @@ test('A delayed channel cannot freeze calendar-month summaries for current chann
  const pub={},cache={};for(const c of channels){const through=c.key==='androidbasha'?'2026-09-28':'2026-10-02',start=addDays(through,-89);const ds=calendarHistory([['2026-09-01',100,5,1,120]],start,through);pub[c.key]={subscribers:1,totalViews:100,updatedAt:'2026-10-03T00:00:00Z'};cache[c.key]={through,monthlyHistory:ds,dailyViews:ds.map(d=>({date:d.date,views:d.views})),dailySubscribers:ds.map(d=>({date:d.date,gained:d.gained})),dailyExtended:ds.map(d=>({date:d.date,lost:d.lost,minutes:d.minutes}))};}
  const out=normalize(pub,cache);assert.equal(out.analyticsThrough,'2026-09-28');assert.equal(out.channels[0].monthlySummaries[0].end,'2026-09-28');assert.equal(out.channels[1].monthlySummaries[0].month,'2026-10');assert.equal(out.channels[1].monthlySummaries[1].complete,true);
 });
+
+import {contentFormatHistory,contentFormatWindow} from './stats-sync.mjs';
+test('Format classification keeps regular videos, Shorts and livestreams distinct',()=>{
+ const split=contentFormatHistory([['2026-09-01','VIDEO_ON_DEMAND',50],['2026-09-01','SHORTS',30],['2026-09-01','LIVE_STREAM',10],['2026-09-01','UNSPECIFIED',5],['2026-09-01','STORY',5]],[{date:'2026-09-01',views:100}]);
+ assert.deepEqual(split,[{date:'2026-09-01',regular:50,shorts:30,other:20}]);
+ assert.deepEqual(contentFormatWindow({contentFormatHistory:split},'2026-09-01','2026-09-01'),{regular:50,shorts:30,other:20});
+});
+test('Unreconciled or missing breakdowns remain unavailable instead of invented zero',()=>{
+ const totals=[{date:'2026-09-01',views:100},{date:'2026-09-02',views:0}],split=contentFormatHistory([['2026-09-01','SHORTS',50]],totals);
+ assert.deepEqual(split[0],{date:'2026-09-01',regular:null,shorts:null,other:null});assert.equal(split[1].regular,0);
+ assert.equal(contentFormatWindow({contentFormatHistory:split},'2026-09-01','2026-09-02'),null);
+ assert.equal(contentFormatWindow({},'2026-09-01','2026-09-02'),null);
+ assert.equal(contentFormatWindow({contentFormatHistory:[split[1],split[1]]},'2026-09-01','2026-09-02'),null);
+ assert.throws(()=>contentFormatHistory([['2026-09-01','UNKNOWN',100]],totals));
+ assert.throws(()=>contentFormatHistory([['2026-09-01','SHORTS',50],['2026-09-01','SHORTS',50]],totals));
+});
+test('Format totals reconcile for aligned rolling and calendar-month windows',()=>{
+ const a=structuredClone(analytics);
+ for(const c of channels){a[c.key].contentFormatHistory=a[c.key].dailyViews.map(d=>({date:d.date,regular:d.views*.6,shorts:d.views*.3,other:d.views*.1}));a[c.key].monthlyHistory=a[c.key].dailyViews.map(d=>({...d,gained:0,lost:0,minutes:0}));}
+ const data=normalize(pub,a),channel=data.channels[0];
+ assert.deepEqual(channel.viewsByFormat30d,{regular:360,shorts:180,other:60});
+ assert.equal(channel.dailyViewsByFormat.length,60);assert.equal(channel.monthlySummaries[0].viewsByFormat.regular,360);
+ delete a.androidbasha.contentFormatHistory;
+ const delayed=normalize(pub,a);assert.equal(delayed.channels[0].viewsByFormat30d,null);assert.equal(delayed.channels[0].dailyViewsByFormat.length,0);assert.ok(delayed.channels[1].viewsByFormat30d);
+ assert.equal(delayed.network.views30d,data.network.views30d);
+});
+test('Format collection queries official content types and preserves totals on format failure',async()=>{
+ const now=new Date('2026-10-01T14:00:00Z'),end=lastCompleteDay(now),start=monthStart(end,-12),days=calendarHistory([],start,end).map(d=>({...d,views:10}));
+ const env={YOUTUBE_API_KEY:'fake',GOOGLE_OAUTH_CLIENT_ID:'fake',GOOGLE_OAUTH_CLIENT_SECRET:'fake',ANDROID_BASHA_REFRESH_TOKEN:'fake'},queries=[];
+ const fetcher=async url=>{
+  if(url.includes('/token'))return Response.json({access_token:'fake'});
+  if(url.includes('/v3/channels'))return Response.json({items:[]});
+  const q=new URL(url).searchParams;queries.push(q);
+  if(q.get('dimensions')==='day')return Response.json({rows:days.map(d=>[d.date,10,0,0,0])});
+  if(q.get('dimensions')==='day,creatorContentType')return Response.json({rows:days.flatMap(d=>[[d.date,'VIDEO_ON_DEMAND',7],[d.date,'SHORTS',3]])});
+  return Response.json({rows:[]});
+ };
+ const result=await collect(env,structuredClone(pub),{},fetcher,now);
+ assert.deepEqual(result.data.channels[0].viewsByFormat30d,{regular:210,shorts:90,other:0});
+ assert.equal(queries.find(q=>q.get('dimensions')==='day,creatorContentType').get('maxResults'),'2500');
+ const retained=await collect(env,structuredClone(pub),result.analyticsCache,async(url,opts)=>url.includes('creatorContentType')?Response.json({}, {status:503}):fetcher(url,opts),new Date('2026-10-02T14:00:00Z'));
+ assert.equal(retained.data.channels[0].views30d,300);assert.deepEqual(retained.data.channels[0].viewsByFormat30d,{regular:210,shorts:90,other:0});
+});
