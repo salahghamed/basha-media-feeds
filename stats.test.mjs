@@ -61,7 +61,7 @@ test('A delayed channel cannot freeze calendar-month summaries for current chann
  const out=normalize(pub,cache);assert.equal(out.analyticsThrough,'2026-09-28');assert.equal(out.channels[0].monthlySummaries[0].end,'2026-09-28');assert.equal(out.channels[1].monthlySummaries[0].month,'2026-10');assert.equal(out.channels[1].monthlySummaries[1].complete,true);
 });
 
-import {contentFormatHistory,contentFormatWindow,contentFormatRows} from './stats-sync.mjs';
+import {contentFormatHistory,contentFormatWindow,contentFormatRows,latestFormatThrough,monthlyContentFormats} from './stats-sync.mjs';
 test('Format classification keeps regular videos, Shorts and livestreams distinct',()=>{
  const split=contentFormatHistory([['2026-09-01','VIDEO_ON_DEMAND',50],['2026-09-01','SHORTS',30],['2026-09-01','LIVE_STREAM',10],['2026-09-01','UNSPECIFIED',5],['2026-09-01','STORY',5]],[{date:'2026-09-01',views:100}]);
  assert.deepEqual(split,[{date:'2026-09-01',regular:50,shorts:30,other:20}]);
@@ -104,4 +104,15 @@ test('Format collection queries official content types and preserves totals on f
  assert.equal(queries.find(q=>q.get('dimensions')==='day,creatorContentType').get('maxResults'),'2500');
  const retained=await collect(env,structuredClone(pub),result.analyticsCache,async(url,opts)=>url.includes('creatorContentType')?Response.json({}, {status:503}):fetcher(url,opts),new Date('2026-10-02T14:00:00Z'));
  assert.equal(retained.data.channels[0].views30d,300);assert.deepEqual(retained.data.channels[0].viewsByFormat30d,{regular:210,shorts:90,other:0});
+});
+test('Delayed format reports have explicit cutoffs without freezing aggregate metrics',()=>{
+ const a=structuredClone(analytics),days=calendarHistory([], '2026-07-01','2026-09-30').map(d=>({...d,views:10}));
+ for(const c of channels){a[c.key].monthlyHistory=days;a[c.key].contentFormatHistory=days.map(d=>({date:d.date,regular:7,shorts:3,other:0}));}
+ a.camerabasha.contentFormatHistory=a.camerabasha.contentFormatHistory.map(d=>d.date>='2026-09-29'?{date:d.date,regular:null,shorts:null,other:null}:d);
+ assert.equal(latestFormatThrough(a.camerabasha),'2026-09-28');
+ const data=normalize(pub,a);assert.equal(data.analyticsThrough,'2026-09-30');assert.equal(data.formatPeriods.current.end,'2026-09-28');
+ assert.ok(data.channels.every(c=>c.dailyViewsByFormat.at(-1).date==='2026-09-28'));
+ const month=data.channels[1].monthlySummaries[0];assert.equal(month.views,300);assert.equal(month.formatViews,280);assert.equal(month.formatThrough,'2026-09-28');assert.deepEqual(month.viewsByFormat,{regular:196,shorts:84,other:0});
+ const gap=structuredClone(a.camerabasha);gap.contentFormatHistory[gap.contentFormatHistory.findIndex(d=>d.date==='2026-09-10')].shorts=null;
+ assert.equal(latestFormatThrough(gap),null);assert.equal(monthlyContentFormats(gap,{start:'2026-09-01',end:'2026-09-30'}).viewsByFormat,null);
 });
