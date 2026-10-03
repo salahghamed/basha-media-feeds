@@ -27,3 +27,31 @@ test('Watch hours and net growth use aligned periods; mismatched audience report
  c.insights.through='2026-09-29';assert.equal(normalize(pub,a).channels[0].topCountries,null);
  assert.equal(normalize(pub,analytics).channels[0].watchHours30d,null);
 });
+
+import {calendarHistory,calendarSummaries,monthStart,monthEnd,paginatedDailyReport} from './stats-sync.mjs';
+test('Calendar months use exact dates, leap days and matching completed-month comparisons',()=>{
+ const days=calendarHistory([], '2024-01-01','2024-03-10').map(d=>({...d,views:10,gained:2,lost:3,minutes:60}));
+ const summaries=calendarSummaries({monthlyHistory:days},'2024-03-10');
+ assert.deepEqual(summaries.map(s=>s.month),['2024-03','2024-02','2024-01']);
+ assert.equal(summaries[0].complete,false);assert.equal(summaries[0].views,100);assert.equal(summaries[0].comparison,null);
+ assert.equal(summaries[1].views,290);assert.equal(summaries[1].watchHours,29);assert.equal(summaries[1].netSubscribers,-29);assert.equal(summaries[1].daysInMonth,29);
+ assert.equal(summaries[1].comparison.viewsPercent,percent(290,310));assert.equal(monthEnd('2024-02-01'),'2024-02-29');assert.equal(monthStart('2026-01-15',-12),'2025-01-01');
+});
+test('Incomplete leading months, missing metrics and duplicate dates are withheld',()=>{
+ const days=calendarHistory([['2026-08-31',9,1,2,60]],'2026-08-15','2026-09-20');
+ const summaries=calendarSummaries({monthlyHistory:days},'2026-09-20');assert.deepEqual(summaries.map(s=>s.month),['2026-09']);assert.equal(summaries[0].comparison,null);
+ assert.deepEqual(calendarSummaries({monthlyHistory:[{date:'2026-09-01',views:2,gained:null,lost:0,minutes:0}]},'2026-09-01'),[]);
+ assert.deepEqual(calendarSummaries({monthlyHistory:[days[0],days[0]]},'2026-09-20'),[]);
+ const missing=days.filter(d=>d.date!=='2026-09-10');assert.deepEqual(calendarSummaries({monthlyHistory:missing},'2026-09-20'),[]);
+});
+test('Monthly comparisons never divide by zero, and old daily caches can supply covered months',()=>{
+ const days=calendarHistory([['2026-09-01',5,2,0,120]],'2026-08-01','2026-09-30');
+ const result=calendarSummaries({monthlyHistory:days},'2026-09-30');assert.equal(result[0].comparison.viewsPercent,null);
+ const cache={dailyViews:days.map(d=>({date:d.date,views:d.views})),dailySubscribers:days.map(d=>({date:d.date,gained:d.gained})),dailyExtended:days.map(d=>({date:d.date,lost:d.lost,minutes:d.minutes}))};
+ assert.deepEqual(calendarSummaries(cache,'2026-09-30'),result);
+});
+test('Daily history paginates and rejects a response beyond the bounded history window',async()=>{
+ const indexes=[];const result=await paginatedDailyReport(async p=>{indexes.push(p.startIndex);return {rows:Array.from({length:p.startIndex==='1'?200:17},(_,i)=>[i])};});
+ assert.equal(result.length,217);assert.deepEqual(indexes,['1','201']);
+ await assert.rejects(paginatedDailyReport(async()=>({rows:Array.from({length:200},()=>[])})),/bounded/);
+});
