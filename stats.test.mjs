@@ -55,3 +55,8 @@ test('Daily report requests the whole bounded history rather than truncating at 
  assert.equal(result.length,367);assert.deepEqual(requests,[{maxResults:'500'}]);
  await assert.rejects(paginatedDailyReport(async()=>({rows:Array.from({length:401},()=>[])})),/bounded/);
 });
+
+test('A delayed channel cannot freeze calendar-month summaries for current channels',()=>{
+ const pub={},cache={};for(const c of channels){const through=c.key==='androidbasha'?'2026-09-28':'2026-10-02',start=addDays(through,-89);const ds=calendarHistory([['2026-09-01',100,5,1,120]],start,through);pub[c.key]={subscribers:1,totalViews:100,updatedAt:'2026-10-03T00:00:00Z'};cache[c.key]={through,monthlyHistory:ds,dailyViews:ds.map(d=>({date:d.date,views:d.views})),dailySubscribers:ds.map(d=>({date:d.date,gained:d.gained})),dailyExtended:ds.map(d=>({date:d.date,lost:d.lost,minutes:d.minutes}))};}
+ const out=normalize(pub,cache);assert.equal(out.analyticsThrough,'2026-09-28');assert.equal(out.channels[0].monthlySummaries[0].end,'2026-09-28');assert.equal(out.channels[1].monthlySummaries[0].month,'2026-10');assert.equal(out.channels[1].monthlySummaries[1].complete,true);
+});
