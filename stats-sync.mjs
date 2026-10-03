@@ -2,6 +2,54 @@ import {gzipSync,gunzipSync} from 'node:zlib';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 
+export const monthStart=(date,offset=0)=>{
+ const [year,month]=date.split('-').map(Number);
+ return new Date(Date.UTC(year,month-1+offset,1,12)).toISOString().slice(0,10);
+};
+export const monthEnd=date=>new Date(Date.parse(monthStart(date,1))-86400000).toISOString().slice(0,10);
+const validDay=d=>/^\d{4}-\d{2}-\d{2}$/.test(d.date)&&['views','gained','lost'].every(k=>Number.isSafeInteger(d[k])&&d[k]>=0)&&Number.isFinite(d.minutes)&&d.minutes>=0;
+export function calendarHistory(rows,start,end){
+ const indexed=new Map(rows.map(r=>[r[0],r]));
+ const result=[];
+ for(let date=start;date<=end;date=new Date(Date.parse(date+'T12:00:00Z')+86400000).toISOString().slice(0,10)){
+  const r=indexed.get(date);result.push({date,views:r?.[1]??0,gained:r?.[2]??0,lost:r?.[3]??0,minutes:r?.[4]??0});
+ }
+ return result;
+}
+export function calendarSummaries(cache,through){
+ if(!cache||!/^\d{4}-\d{2}-\d{2}$/.test(through||''))return [];
+ let days=cache.monthlyHistory;
+ if(!Array.isArray(days)||!days.length){
+  const gains=new Map((cache.dailySubscribers||[]).map(d=>[d.date,d.gained])),extra=new Map((cache.dailyExtended||[]).map(d=>[d.date,d]));
+  days=(cache.dailyViews||[]).map(d=>({...d,gained:gains.get(d.date),lost:extra.get(d.date)?.lost,minutes:extra.get(d.date)?.minutes}));
+ }
+ if(!days.every(validDay)||new Set(days.map(d=>d.date)).size!==days.length)return [];
+ days=days.filter(d=>d.date<=through).sort((a,b)=>a.date.localeCompare(b.date));
+ const grouped=new Map();for(const d of days){const key=d.date.slice(0,7);if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(d);}
+ const summaries=[];
+ for(const [month,rows] of grouped){
+  const start=month+'-01',last=monthEnd(start),end=last<through?last:through;
+  const expected=Math.round((Date.parse(end+'T12:00:00Z')-Date.parse(start+'T12:00:00Z'))/86400000)+1;
+  if(rows[0].date!==start||rows.at(-1).date!==end||rows.length!==expected)continue;
+  const total=k=>rows.reduce((sum,d)=>sum+d[k],0),views=total('views'),gained=total('gained'),lost=total('lost'),peak=rows.reduce((best,d)=>d.views>best.views?d:best,rows[0]);
+  const previous=summaries.find(s=>s.month===monthStart(start,-1).slice(0,7)&&s.complete);
+  const current={month,start,end,complete:end===last,daysReported:expected,daysInMonth:Number(last.slice(-2)),views,watchHours:total('minutes')/60,subscribersGained:gained,subscribersLost:lost,netSubscribers:gained-lost,peakDay:views>0?{date:peak.date,views:peak.views,sharePercent:peak.views/views*100}:null,comparison:null};
+  if(current.complete&&previous){const change=(a,b)=>b===0?null:(a-b)/b*100;current.comparison={month:previous.month,viewsPercent:change(views,previous.views),watchPercent:change(current.watchHours,previous.watchHours),subscriberPercent:change(gained,previous.subscribersGained)};}
+  summaries.push(current);
+ }
+ return summaries.slice(-13).reverse();
+}
+export async function paginatedDailyReport(request){
+ const all=[];
+ for(let page=0;page<4;page++){
+  const response=await request({maxResults:'200',startIndex:String(page*200+1)}),rows=response.rows||[];
+  if(!Array.isArray(rows)||rows.length>200)throw new Error('Invalid report page');
+  all.push(...rows);if(rows.length<200)return all;
+ }
+ throw new Error('Daily report exceeded bounded history window');
+}
+
+
 // This is the sole channel registry. IDs resolve from official handles once,
 // then remain pinned in the successful cache. Never infer channel ownership.
 export const channels = [
@@ -47,7 +95,7 @@ export function normalize(publicCache,analyticsCache,now=new Date()){
   const watchHours30d=extraReady?aggregate('minutes')/60:null,previousWatchHours30d=extraReady?aggregate('minutes',true)/60:null;
   const netSubscribers30d=extraReady&&subsReady?subscribersGained30d-aggregate('lost'):null,previousNetSubscribers30d=extraReady&&subsReady?previousSubscribersGained30d-aggregate('lost',true):null;
   const insights=a?.insights?.through===analyticsThrough?a.insights:null;
-  return {watchHours30d,previousWatchHours30d,watchChangePercent:watchHours30d===null?null:percent(watchHours30d,previousWatchHours30d),netSubscribers30d,previousNetSubscribers30d,topCountries:insights?.countries??null,topVideo:insights?.topVideo??null,insightsThrough:insights?.through??null,key:c.key,name:c.name,order:c.order,channelId:pub.channelId||null,thumbnail:pub.thumbnail||null,subscribers:pub.subscribers??null,totalViews:pub.totalViews??null,publicUpdatedAt:pub.updatedAt||null,analyticsUpdatedAt:a?.updatedAt||null,analyticsStatus:ready?'connected':'connection-required',analyticsThrough:ready?analyticsThrough:null,views30d,previousViews30d,changePercent:ready?percent(views30d,previousViews30d):null,subscribersGained30d,previousSubscribersGained30d,subscriberChangePercent:subsReady?percent(subscribersGained30d,previousSubscribersGained30d):null,dailyViews};
+  return {monthlySummaries:calendarSummaries(a,analyticsThrough),watchHours30d,previousWatchHours30d,watchChangePercent:watchHours30d===null?null:percent(watchHours30d,previousWatchHours30d),netSubscribers30d,previousNetSubscribers30d,topCountries:insights?.countries??null,topVideo:insights?.topVideo??null,insightsThrough:insights?.through??null,key:c.key,name:c.name,order:c.order,channelId:pub.channelId||null,thumbnail:pub.thumbnail||null,subscribers:pub.subscribers??null,totalViews:pub.totalViews??null,publicUpdatedAt:pub.updatedAt||null,analyticsUpdatedAt:a?.updatedAt||null,analyticsStatus:ready?'connected':'connection-required',analyticsThrough:ready?analyticsThrough:null,views30d,previousViews30d,changePercent:ready?percent(views30d,previousViews30d):null,subscribersGained30d,previousSubscribersGained30d,subscriberChangePercent:subsReady?percent(subscribersGained30d,previousSubscribersGained30d):null,dailyViews};
  });
  const views30d=sum(normalized,'views30d'),previousViews30d=sum(normalized,'previousViews30d');
  const publicTimes=normalized.map(c=>c.publicUpdatedAt).filter(Boolean).sort();
@@ -75,16 +123,17 @@ export async function collect(env,publicCache,analyticsCache,fetcher=fetch,now=n
  for(const c of channels){
   const refresh=env[c.credentialRef+'_REFRESH_TOKEN'],cached=analyticsCache[c.key];
   if(!refresh||!env.GOOGLE_OAUTH_CLIENT_ID||!env.GOOGLE_OAUTH_CLIENT_SECRET||!publicCache[c.key]?.channelId)continue;
-  if(cached?.dailyExtended?.length===90&&cached?.insights?.through===cached.through&&now-new Date(cached.updatedAt)<6*3600000)continue;
+  if(cached?.dailyExtended?.length===90&&cached?.monthlyHistory?.length>=90&&cached?.insights?.through===cached.through&&now-new Date(cached.updatedAt)<6*3600000)continue;
   try{
    const token=await json(await fetcher('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:env.GOOGLE_OAUTH_CLIENT_ID,client_secret:env.GOOGLE_OAUTH_CLIENT_SECRET,refresh_token:refresh,grant_type:'refresh_token'}),signal:AbortSignal.timeout(20000)}));
    tokens.set(c.key,token.access_token);
-   const end=lastCompleteDay(now),start=addDays(end,-100);
-   const report=await json(await fetcher('https://youtubeanalytics.googleapis.com/v2/reports?'+new URLSearchParams({ids:'channel=='+publicCache[c.key].channelId,startDate:start,endDate:end,metrics:'views,subscribersGained,subscribersLost,estimatedMinutesWatched',dimensions:'day',sort:'day',maxResults:'200'}),{headers:{Authorization:`Bearer ${token.access_token}`},signal:AbortSignal.timeout(30000)}));
-   const rows=report.rows||[];if(!rows.length)throw new Error('Analytics pending');
+   const end=lastCompleteDay(now),start=monthStart(end,-12);
+   const rows=await paginatedDailyReport(async paging=>json(await fetcher('https://youtubeanalytics.googleapis.com/v2/reports?'+new URLSearchParams({ids:'channel=='+publicCache[c.key].channelId,startDate:start,endDate:end,metrics:'views,subscribersGained,subscribersLost,estimatedMinutesWatched',dimensions:'day',sort:'day',...paging}),{headers:{Authorization:`Bearer ${token.access_token}`},signal:AbortSignal.timeout(30000)})));
+   if(!rows.length)throw new Error('Analytics pending');
    if(rows.some(r=>!/^\d{4}-\d{2}-\d{2}$/.test(r[0])||!Number.isSafeInteger(r[1])||r[1]<0||!Number.isSafeInteger(r[2])||r[2]<0||!Number.isSafeInteger(r[3])||r[3]<0||!Number.isFinite(r[4])||r[4]<0||r[0]<start||r[0]>end))throw new Error('Invalid daily report');
+   if(new Set(rows.map(r=>r[0])).size!==rows.length||rows.some((r,i)=>i&&r[0]<=rows[i-1][0]))throw new Error('Invalid report ordering');
    const through=rows.at(-1)[0];if(through<addDays(end,-10))throw new Error('Analytics too old');
-   analyticsCache[c.key]={through,updatedAt:now.toISOString(),dailyViews:history(rows,addDays(through,-89),through),dailySubscribers:subscriberHistory(rows,addDays(through,-89),through),dailyExtended:extendedHistory(rows,addDays(through,-89),through),insights:cached?.insights??null};
+   analyticsCache[c.key]={through,updatedAt:now.toISOString(),monthlyHistory:calendarHistory(rows,start,through),dailyViews:history(rows,addDays(through,-89),through),dailySubscribers:subscriberHistory(rows,addDays(through,-89),through),dailyExtended:extendedHistory(rows,addDays(through,-89),through),insights:cached?.insights??null};
    console.log(`${c.name}: Analytics connected through ${through}`);
   }catch{console.warn(`${c.name}: Analytics refresh delayed or owner authorization required; cached values retained`);}
  }
@@ -117,3 +166,4 @@ export async function run(env=process.env,fetcher=fetch){
  console.log('Published network dashboard. Analytics connections: '+result.data.network.analyticsChannels+'/5');
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))run().catch(()=>{console.error('Statistics update could not complete. Previous dashboard remains available. Check secret names, API enablement and channel authorization.');process.exitCode=1;});
+
